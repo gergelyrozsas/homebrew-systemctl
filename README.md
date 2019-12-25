@@ -18,7 +18,7 @@ See usage information using:
 brew systemctl --help
 ```
 
-##Remarks / Caveats
+## Remarks / Caveats
 
 #### The command aims to be a Linux counterpart of the `brew services` command.
 
