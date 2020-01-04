@@ -29,7 +29,6 @@
 #:  Operate on `~/.config/systemd/user` (started at login).
 
 module Kernel
-
   def passthru(cmd, env = {})
     if ARGV.verbose?
       puts "Executing `#{cmd}`"
@@ -47,284 +46,17 @@ module Kernel
   def bin
     'brew systemctl'
   end
-
-end
-
-class SystemCtlPlistToServiceFileConverter
-
-  def convert(definition)
-    service = {
-      :Unit => {},
-      :Service => {},
-      :Install => {},
-    }
-    
-    unsupported_keys = []
-    definition.plist.each do |key, value|
-      case key
-      when 'KeepAlive'
-        service[:Service][:Restart] = 'always'
-      when 'Label'
-        service[:Unit][:Description] = value
-      when 'ProgramArguments'
-        service[:Service][:ExecStart] = value.map { |arg| "'#{arg}'" }.join(' ')
-      when 'RunAtLoad'
-        # AFAIK, there is neither and equivalent nor a real need for this.
-      when 'StandardErrorPath'
-        service[:Service][:StandardError] = "file:#{value}"
-      when 'WorkingDirectory'
-        service[:Service][:WorkingDirectory] = value
-      else
-        unsupported_keys.push(key)
-      end
-    end
-
-    unless unsupported_keys.empty?
-      opoo("The following plist keys are not yet supported, and were ignored: '#{unsupported_keys.join("', '")}'.")
-    end
-    
-    service[:Service][:Type] = 'simple'
-    service[:Install][:WantedBy] = 'default.target'
-    
-    service_lines = []
-    service.each do |section, values|
-      service_lines.push("[#{section}]")
-      values.each do |key, value|
-        service_lines.push("#{key}=#{value}")
-      end
-      service_lines.push('')
-    end
-
-    service_lines.join("\n")
-  end  
-
-end
-
-class SystemCtlCommandline
-
-  def initialize(systemctl)
-    @systemctl = systemctl
-  end
-
-  def invoke(*args)
-    cmd = args.unshift(@systemctl).join(' ')
-    passthru(cmd, {
-      'XDG_RUNTIME_DIR' => "/run/user/#{Process.uid}"
-    })
-  end
-
-end
-
-class SystemCtlStandardRunInfoGenerator
-
-  def initialize(commandline)
-    @commandline = commandline
-  end
-
-  def run_info(service_id)
-    snapshot = run_snapshot
-    {
-      user: snapshot.key?(service_id) ? snapshot[service_id][:user] : nil,
-      status: snapshot.key?(service_id) ? snapshot[service_id][:status] : :unknown
-    }
-  end
-  
-  def reset
-    @run_snapshot = nil
-  end
-  
-  private
-  
-  def run_snapshot
-    @run_snapshot ||= {}
-      .merge(snapshot_for_bus('user'))
-      .merge(snapshot_for_bus('system'))
-  end
-  
-  def snapshot_for_bus(bus)
-    hash = {}
-    uid  = ('system' == bus) ? 0 : Process.uid
-    args = "--#{bus} --all --type=service --no-pager --no-legend list-units"
-    lines = @commandline.invoke(args).lines
-
-    lines.each do |line|
-      items = line.split
-      service_id = items[0].sub('.service', '')
-      hash[service_id] ||= {
-        user: uid,
-        status: convert_status(items[1], items[2], items[3])
-      }
-    end
-    hash
-  end
-  
-  def convert_status(load, active, sub)
-    return :unknown if ('not-found' == load)
-    case sub
-      when 'running'
-        return :started
-      when 'failed'
-        return :error
-      when 'exited'
-        return :stopped
-      else
-        return :unknown
-    end
-  end
-
-end
-
-class SystemCtlExperimentalRunInfoGenerator
-
-  def initialize(commandline)
-    @commandline = commandline
-  end
- 
-  def run_info(service_id)
-    snapshot = run_snapshot
-    {
-      user: snapshot.key?(service_id) ? snapshot[service_id] : nil,
-      status: snapshot.key?(service_id) ? :started : :stopped,
-    }
-  end
-  
-  def reset
-    @run_snapshot = nil
-  end
-  
-  private
-  
-  def run_snapshot
-    @run_snapshot ||= begin
-      snapshot = {}
-      uid = nil
-      lines = @commandline.invoke("status --no-pager --no-legend").lines
-      lines.each do |line|
-        line.match(/system\.slice/) { |match| uid = 0 }
-        line.match(/user-([\d]+)\.slice/) { |match| uid = match[1].to_i }
-        line.match(/([\w+-.@]+)\.service/) do |match|
-          raise("This should not happen. `#{@systemctl} status` output might differ from what is expected.") unless uid
-          service_id = match[1]
-          snapshot[service_id] = uid
-        end
-      end
-      snapshot
-    end
-  end
-
-end
-  
-class SystemCtlDriver
-
-  def self.create
-    commandline = SystemCtlCommandline.new(which('systemctl'))
-    new(
-      SystemCtlPlistToServiceFileConverter.new,
-      # SystemCtlStandardRunInfoGenerator.new(commandline),
-      SystemCtlExperimentalRunInfoGenerator.new(commandline),
-      commandline
-    )
-  end
-  
-  def initialize(converter, generator, commandline)
-    @converter = converter
-    @generator = generator
-    @commandline = commandline
-  end
-  
-  def run(definition)
-    start(definition)
-  end
-
-  def stop(definition)
-    invoke('stop', get_real_service_id(definition.id))
-    @generator.reset
-  end
-  
-  def start(definition)
-    install(definition)
-    invoke('start', get_real_service_id(definition.id))
-    @generator.reset
-  end
-  
-  def restart(definition)
-    install(definition)
-    invoke('restart', get_real_service_id(definition.id))
-    @generator.reset
-  end
-  
-  def register(definition)
-    install(definition)
-    invoke('enable', get_real_service_id(definition.id))
-  end
-  
-  def unregister(definition)
-    was_installed = installed?(definition)
-    install(definition)
-    invoke('disable', get_real_service_id(definition.id))
-    uninstall(definition) unless was_installed
-  end
-  
-  def install(definition)
-    get_service_file_path(definition).write(@converter.convert(definition)) unless installed?(definition)
-    invoke('daemon-reload')
-  end
-  
-  def installed?(definition)
-    get_service_file_path(definition).exist?
-  end
-
-  def uninstall(definition)
-    get_service_file_path(definition).delete if installed?(definition)
-    invoke('daemon-reload')
-  end
-
-  def running?(definition)
-    run_info(definition).running?
-  end
-  
-  def run_info(definition)
-    service_id = get_real_service_id(definition.id)
-    ServiceRunInfo.new(definition, -> do
-      info = @generator.run_info(service_id)
-      info[:user] = Etc.getpwuid(info[:user].nil? ? Process.uid : info[:user].to_i)
-      file = get_service_file_path(definition, info[:user])
-      info[:file] = file.exist? ? file.to_s : nil
-      return info
-    end.call)
-  end
-
-  private
-  
-  def invoke(*args)
-    args.unshift('--user') unless Process.uid.zero?
-    @commandline.invoke(args)
-  end
-  
-  def get_service_file_path(definition, user = nil)
-    user ||= Etc.getpwuid(Process.uid)
-    service_id = get_real_service_id(definition.id)
-    Pathname.new(format("%<dir>s/#{service_id}.service", {
-      dir: user.uid.zero? ? '/lib/systemd/system' : "#{user.dir}/.config/systemd/user",
-    }))
-  end
-  
-  def get_real_service_id(definition_id)
-    definition_id.sub('@', '-at-')
-  end
-
 end
 
 class DriverFactory
-
   def self.create
     if OS.linux? && which('systemctl')
-      return SystemCtlDriver.create
+      require_relative '../lib/systemctl'
+      return SystemCtl::Driver.create
     end
 
     raise('No suitable driver was found.')
   end
-
 end
 
 class ServiceRunInfo
@@ -352,11 +84,9 @@ class ServiceRunInfo
   def to_h
     { name: name, user: user, file: file, status: status }
   end
-
 end
 
 class ServiceDefinition
-
   def initialize(formula)
     @formula = formula
   end
@@ -378,11 +108,9 @@ class ServiceDefinition
       Plist.parse_xml(plist_xml)
     end
   end
-
 end
 
 class RunInfoListOutput
-
   def self.create(run_info)
     run_info_hashes = run_info.map do |info|
       info.to_h
@@ -418,11 +146,9 @@ class RunInfoListOutput
     end
     return lines.join("\n")
   end
-
 end
 
 module OutputMessages
-
   def self.already_running(info)
     "Service '#{info.name}' is already running, use `#{bin} restart #{info.name}` to restart."
   end
@@ -442,11 +168,9 @@ module OutputMessages
   def self.cannot_manage(info)
     "Cannot manage '#{info.name}', the service was started by '#{info.user}'."
   end
-
 end
 
 class Command
-
   def initialize(driver, installed_formulae)
     @driver = driver
     @installed_formulae = installed_formulae.map do |formula|
@@ -593,11 +317,9 @@ class Command
   def current_user
     @current_user ||= Etc.getpwuid(Process.uid).name
   end
-
 end
 
 class ArgvInput
-
   def initialize(argv)
     @argv = argv
   end
@@ -609,7 +331,6 @@ class ArgvInput
   def flag?(name)
     @argv.flags_only.include?("--#{name}")
   end
-
 end
 
 unless defined?(HOMEBREW_LIBRARY_PATH)
