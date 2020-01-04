@@ -29,6 +29,7 @@
 #:  Operate on `~/.config/systemd/user` (started at login).
 
 module Kernel
+
   def passthru(cmd, env = {})
     if ARGV.verbose?
       puts "Executing `#{cmd}`"
@@ -46,9 +47,11 @@ module Kernel
   def bin
     'brew systemctl'
   end
+
 end
 
 class SystemCtlPlistToServiceFileConverter
+
   def convert(definition)
     service = {
       :Unit => {},
@@ -59,20 +62,20 @@ class SystemCtlPlistToServiceFileConverter
     unsupported_keys = []
     definition.plist.each do |key, value|
       case key
-        when 'Label'
-          service[:Unit][:Description] = value
-        when 'ProgramArguments'
-          service[:Service][:ExecStart] = value.map { |arg| "'#{arg}'" }.join(' ')
-        when 'KeepAlive'
-          service[:Service][:Restart] = 'always'    
-        when 'StandardErrorPath'
-          service[:Service][:StandardError] = "file:#{value}"
-        when 'WorkingDirectory'
-          service[:Service][:WorkingDirectory] = value
-        when 'RunAtLoad'
-          # AFAIK, there is neither and equivalent nor a real need for this.
-        else
-          unsupported_keys.push(key)
+      when 'KeepAlive'
+        service[:Service][:Restart] = 'always'
+      when 'Label'
+        service[:Unit][:Description] = value
+      when 'ProgramArguments'
+        service[:Service][:ExecStart] = value.map { |arg| "'#{arg}'" }.join(' ')
+      when 'RunAtLoad'
+        # AFAIK, there is neither and equivalent nor a real need for this.
+      when 'StandardErrorPath'
+        service[:Service][:StandardError] = "file:#{value}"
+      when 'WorkingDirectory'
+        service[:Service][:WorkingDirectory] = value
+      else
+        unsupported_keys.push(key)
       end
     end
 
@@ -94,9 +97,11 @@ class SystemCtlPlistToServiceFileConverter
 
     service_lines.join("\n")
   end  
+
 end
 
 class SystemCtlCommandline
+
   def initialize(systemctl)
     @systemctl = systemctl
   end
@@ -111,6 +116,7 @@ class SystemCtlCommandline
 end
 
 class SystemCtlStandardRunInfoGenerator
+
   def initialize(commandline)
     @commandline = commandline
   end
@@ -149,7 +155,7 @@ class SystemCtlStandardRunInfoGenerator
         status: convert_status(items[1], items[2], items[3])
       }
     end
-    return hash
+    hash
   end
   
   def convert_status(load, active, sub)
@@ -165,9 +171,11 @@ class SystemCtlStandardRunInfoGenerator
         return :unknown
     end
   end
+
 end
 
 class SystemCtlExperimentalRunInfoGenerator
+
   def initialize(commandline)
     @commandline = commandline
   end
@@ -207,6 +215,7 @@ class SystemCtlExperimentalRunInfoGenerator
 end
   
 class SystemCtlDriver
+
   def self.create
     commandline = SystemCtlCommandline.new(which('systemctl'))
     new(
@@ -278,11 +287,11 @@ class SystemCtlDriver
     service_id = get_real_service_id(definition.id)
     ServiceRunInfo.new(definition, -> do
       info = @generator.run_info(service_id)
-      info[:user] = info[:user].nil? ? Etc.getpwuid : Etc.getpwuid(info[:user].to_i)
+      info[:user] = Etc.getpwuid(info[:user].nil? ? Process.uid : info[:user].to_i)
       file = get_service_file_path(definition, info[:user])
       info[:file] = file.exist? ? file.to_s : nil
       return info
-    end.call())
+    end.call)
   end
 
   private
@@ -293,7 +302,7 @@ class SystemCtlDriver
   end
   
   def get_service_file_path(definition, user = nil)
-    user ||= Etc.getpwuid
+    user ||= Etc.getpwuid(Process.uid)
     service_id = get_real_service_id(definition.id)
     Pathname.new(format("%<dir>s/#{service_id}.service", {
       dir: user.uid.zero? ? '/lib/systemd/system' : "#{user.dir}/.config/systemd/user",
@@ -307,13 +316,15 @@ class SystemCtlDriver
 end
 
 class DriverFactory
+
   def self.create
-    if (OS.linux? && which('systemctl'))
+    if OS.linux? && which('systemctl')
       return SystemCtlDriver.create
     end
-    
+
     raise('No suitable driver was found.')
   end
+
 end
 
 class ServiceRunInfo
@@ -345,6 +356,7 @@ class ServiceRunInfo
 end
 
 class ServiceDefinition
+
   def initialize(formula)
     @formula = formula
   end
@@ -366,9 +378,11 @@ class ServiceDefinition
       Plist.parse_xml(plist_xml)
     end
   end
+
 end
 
 class RunInfoListOutput
+
   def self.create(run_info)
     run_info_hashes = run_info.map do |info|
       info.to_h
@@ -404,9 +418,11 @@ class RunInfoListOutput
     end
     return lines.join("\n")
   end
+
 end
 
 module OutputMessages
+
   def self.already_running(info)
     "Service '#{info.name}' is already running, use `#{bin} restart #{info.name}` to restart."
   end
@@ -426,9 +442,11 @@ module OutputMessages
   def self.cannot_manage(info)
     "Cannot manage '#{info.name}', the service was started by '#{info.user}'."
   end
+
 end
 
 class Command
+
   def initialize(driver, installed_formulae)
     @driver = driver
     @installed_formulae = installed_formulae.map do |formula|
@@ -447,24 +465,24 @@ class Command
     command = args.shift
     names = input.flag?('all') ? service_names : args
     case command
-      when 'cleanup', 'clean', 'cl', 'rm'
-        cleanup(service_names)
-      when 'list', 'ls'
-        list(service_names)
-      when 'purge'
-        purge(service_names)
-      when 'restart', 'relaunch', 'reload', 'r'
-        restart(names)
-      when 'run'
-        run(names)
-      when 'start', 'launch', 'load', 's', 'l'
-        start(names)
-      when 'stop', 'unload', 'terminate', 'term', 't', 'u'
-        stop(names)
-      else
-        usage = passthru("#{bin} --help")
-        raise("Unknown command `#{command}`!\n#{usage}") unless command.nil?
-        puts usage
+    when 'cleanup', 'clean', 'cl', 'rm'
+      cleanup(service_names)
+    when 'list', 'ls'
+      list(service_names)
+    when 'purge'
+      purge(service_names)
+    when 'restart', 'relaunch', 'reload', 'r'
+      restart(names)
+    when 'run'
+      run(names)
+    when 'start', 'launch', 'load', 's', 'l'
+      start(names)
+    when 'stop', 'unload', 'terminate', 'term', 't', 'u'
+      stop(names)
+    else
+      usage = passthru("#{bin} --help")
+      raise("Unknown command `#{command}`!\n#{usage}") unless command.nil?
+      puts usage
     end
   end
   
@@ -513,14 +531,14 @@ class Command
   def cleanup(names)
     run_info_by_name(names).each do |info|
       # Remove unused service files (for current user).
-      if (@driver.installed?(info.definition) && (!info.running? || !current_user_owns?(info)))
+      if @driver.installed?(info.definition) && (!info.running? || !current_user_owns?(info))
         @driver.unregister(info.definition)
         @driver.uninstall(info.definition)
         ohai("Successfully removed service file for '#{info.name}' for user '#{current_user}'.")
       end
       
       # Stop running services not having service files (for current user).
-      if (info.running? && info.file.nil?)
+      if info.running? && info.file.nil?
         next puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
         puts(OutputMessages.begin_action('stopping', info))
         @driver.stop(info.definition)
@@ -573,12 +591,13 @@ class Command
   end
   
   def current_user
-    @current_user ||= Etc.getpwuid.name
+    @current_user ||= Etc.getpwuid(Process.uid).name
   end
 
 end
 
 class ArgvInput
+
   def initialize(argv)
     @argv = argv
   end
@@ -590,6 +609,7 @@ class ArgvInput
   def flag?(name)
     @argv.flags_only.include?("--#{name}")
   end
+
 end
 
 unless defined?(HOMEBREW_LIBRARY_PATH)
@@ -597,7 +617,7 @@ unless defined?(HOMEBREW_LIBRARY_PATH)
 end
 
 # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
-if (ENV['TMUX'] && !quiet_system('/usr/bin/pbpaste'))
+if ENV['TMUX'] && !quiet_system('/usr/bin/pbpaste')
   abort("#{bin} cannot run under tmux!")
 end
 
