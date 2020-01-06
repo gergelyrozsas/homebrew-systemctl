@@ -190,19 +190,19 @@ class Command
     names = input.flag?('all') ? service_names : args
     case command
     when 'cleanup', 'clean', 'cl', 'rm'
-      cleanup(service_names)
+      foreach(service_names, :cleanup)
     when 'list', 'ls'
       list(service_names)
     when 'purge'
-      purge(service_names)
+      foreach(service_names, :purge)
     when 'restart', 'relaunch', 'reload', 'r'
-      restart(names)
+      foreach(names, :restart, true)
     when 'run'
-      run(names)
+      foreach(names, :run, true)
     when 'start', 'launch', 'load', 's', 'l'
-      start(names)
+      foreach(names, :start, true)
     when 'stop', 'unload', 'terminate', 'term', 't', 'u'
-      stop(names)
+      foreach(names, :stop, true)
     else
       usage = passthru("#{bin} --help")
       raise("Unknown command `#{command}`!\n#{usage}") unless command.nil?
@@ -212,62 +212,52 @@ class Command
   
   private
   
-  def run(names)
-    run_info_by_name(names, true).each do |info|
-      next puts(OutputMessages.already_running(info)) if info.running?
-      puts(OutputMessages.begin_action('running', info))
-      @driver.run(info.definition)
-      ohai(OutputMessages.successful_action('started', info))
-    end
+  def run(info)
+    return puts(OutputMessages.already_running(info)) if info.running?
+    puts(OutputMessages.begin_action('running', info))
+    @driver.run(info.definition)
+    ohai(OutputMessages.successful_action('started', info))
   end
   
-  def start(names)
-    run_info_by_name(names, true).each do |info|
-      next puts(OutputMessages.already_running(info)) if info.running?
-      @driver.register(info.definition)
-      puts(OutputMessages.begin_action('starting', info))
-      @driver.start(info.definition)
-      ohai(OutputMessages.successful_action('started', info))
-    end
+  def start(info)
+    return puts(OutputMessages.already_running(info)) if info.running?
+    @driver.register(info.definition)
+    puts(OutputMessages.begin_action('starting', info))
+    @driver.start(info.definition)
+    ohai(OutputMessages.successful_action('started', info))
   end
   
-  def stop(names)
-    run_info_by_name(names, true).each do |info|
-      next puts(OutputMessages.not_running(info)) unless info.running?
-      next puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
+  def stop(info)
+    return puts(OutputMessages.not_running(info)) unless info.running?
+    return puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
+    @driver.unregister(info.definition)
+    puts(OutputMessages.begin_action('stopping', info))
+    @driver.stop(info.definition)
+    ohai(OutputMessages.successful_action('stopped', info))
+  end
+  
+  def restart(info)
+    return puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
+    @driver.register(info.definition)
+    puts(OutputMessages.begin_action('restarting', info))
+    @driver.restart(info.definition)
+    ohai(OutputMessages.successful_action('restarted', info))
+  end
+  
+  def cleanup(info)
+    # Remove unused service files (for current user).
+    if @driver.installed?(info.definition) && (!info.running? || !current_user_owns?(info))
       @driver.unregister(info.definition)
+      @driver.uninstall(info.definition)
+      ohai("Successfully removed service file for '#{info.name}' for user '#{current_user}'.")
+    end
+    
+    # Stop running services not having service files (for current user).
+    if info.running? && info.file.nil?
+      return puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
       puts(OutputMessages.begin_action('stopping', info))
       @driver.stop(info.definition)
       ohai(OutputMessages.successful_action('stopped', info))
-    end
-  end
-  
-  def restart(names)
-    run_info_by_name(names, true).each do |info|
-      next puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
-      @driver.register(info.definition)
-      puts(OutputMessages.begin_action('restarting', info))
-      @driver.restart(info.definition)
-      ohai(OutputMessages.successful_action('restarted', info))
-    end
-  end
-  
-  def cleanup(names)
-    run_info_by_name(names).each do |info|
-      # Remove unused service files (for current user).
-      if @driver.installed?(info.definition) && (!info.running? || !current_user_owns?(info))
-        @driver.unregister(info.definition)
-        @driver.uninstall(info.definition)
-        ohai("Successfully removed service file for '#{info.name}' for user '#{current_user}'.")
-      end
-      
-      # Stop running services not having service files (for current user).
-      if info.running? && info.file.nil?
-        next puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
-        puts(OutputMessages.begin_action('stopping', info))
-        @driver.stop(info.definition)
-        ohai(OutputMessages.successful_action('stopped', info))
-      end
     end
   end
   
@@ -276,14 +266,18 @@ class Command
     puts(RunInfoListOutput.create(run_info))
   end
   
-  def purge(names)
-    stop(names)
-    cleanup(names)
+  def purge(info)
+    stop(info)
+    info = @driver.run_info(info.definition)
+    cleanup(info)
   end
   
-  def run_info_by_name(names, exception_if_empty = false)
-    raise("Please provide formula(e) name(s) or use --all.") if (names.empty? && exception_if_empty)
-
+  def foreach(names, method, is_input = false)
+    raise("Please provide formula(e) name(s) or use --all.") if (names.empty? && is_input)
+    run_info_by_name(names).each { |info| send(method, info) }
+  end
+  
+  def run_info_by_name(names)
     non_service_formulae = []
     missing_formulae = []
 
