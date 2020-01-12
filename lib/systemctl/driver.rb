@@ -23,31 +23,31 @@ module SystemCtl
     end
 
     def stop(definition)
-      invoke('stop', get_real_service_id(definition.id))
+      invoke('stop', get_real_service_id(definition))
       @generator.reset
     end
 
     def start(definition)
       install(definition)
-      invoke('start', get_real_service_id(definition.id))
+      invoke('start', get_real_service_id(definition))
       @generator.reset
     end
 
     def restart(definition)
       install(definition)
-      invoke('restart', get_real_service_id(definition.id))
+      invoke('restart', get_real_service_id(definition))
       @generator.reset
     end
 
     def register(definition)
       install(definition)
-      invoke('enable', get_real_service_id(definition.id))
+      invoke('enable', get_real_service_id(definition))
     end
 
     def unregister(definition)
       was_installed = installed?(definition)
       install(definition)
-      invoke('disable', get_real_service_id(definition.id))
+      invoke('disable', get_real_service_id(definition))
       uninstall(definition) unless was_installed
     end
 
@@ -70,7 +70,7 @@ module SystemCtl
     end
 
     def status(definition)
-      service_id = get_real_service_id(definition.id)
+      service_id = get_real_service_id(definition)
       Service.new(definition, -> do
         info = @generator.run_info(service_id)
         info[:user] = Etc.getpwuid(info[:user].nil? ? Process.uid : info[:user].to_i)
@@ -89,14 +89,14 @@ module SystemCtl
 
     def get_service_file_path(definition, user = nil)
       user ||= Etc.getpwuid(Process.uid)
-      service_id = get_real_service_id(definition.id)
+      service_id = get_real_service_id(definition)
       Pathname.new(format("%<dir>s/#{service_id}.service", {
           dir: user.uid.zero? ? '/lib/systemd/system' : "#{user.dir}/.config/systemd/user",
       }))
     end
 
-    def get_real_service_id(definition_id)
-      definition_id.sub('@', '-at-')
+    def get_real_service_id(definition)
+      definition.id.sub('@', '-at-')
     end
   end
 end
