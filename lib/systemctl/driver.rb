@@ -66,12 +66,12 @@ module SystemCtl
     end
 
     def running?(definition)
-      run_info(definition).running?
+      status(definition).running?
     end
 
-    def run_info(definition)
+    def status(definition)
       service_id = get_real_service_id(definition.id)
-      ServiceRunInfo.new(definition, -> do
+      Service.new(definition, -> do
         info = @generator.run_info(service_id)
         info[:user] = Etc.getpwuid(info[:user].nil? ? Process.uid : info[:user].to_i)
         file = get_service_file_path(definition, info[:user])

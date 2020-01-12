@@ -59,7 +59,7 @@ class DriverFactory
   end
 end
 
-class ServiceRunInfo
+class Service
   attr_reader :file, :status, :definition
 
   def initialize(definition, values)
@@ -110,14 +110,14 @@ class ServiceDefinition
   end
 end
 
-class RunInfoListOutput
-  def self.create(run_info)
-    run_info_hashes = run_info.map do |info|
-      info.to_h
+class ServiceListOutput
+  def self.create(service_list)
+    service_hashes = service_list.map do |service|
+      service.to_h
     end
 
-    longest_name = [run_info_hashes.max_by { |info| info[:name].length }[:name].length, 4].max
-    longest_user = [run_info_hashes.map { |info| info[:user].nil? ? 4 : info[:user].length }.max, 4].max
+    longest_name = [service_hashes.max_by { |service_hash| service_hash[:name].length }[:name].length, 4].max
+    longest_user = [service_hashes.map { |service_hash| service_hash[:user].nil? ? 4 : service_hash[:user].length }.max, 4].max
   
     lines = []
     lines.push(format(
@@ -130,8 +130,8 @@ class RunInfoListOutput
         file: 'File'
       }
     ))
-    run_info_hashes.each do |info|
-      info[:status] = case info[:status]
+    service_hashes.each do |service_hash|
+      service_hash[:status] = case service_hash[:status]
         when :started then "#{Tty.green}started#{Tty.reset}"
         when :stopped then "stopped"
         when :error   then "#{Tty.red}error  #{Tty.reset}"
@@ -141,7 +141,7 @@ class RunInfoListOutput
       lines.push(format(
         "%-#{longest_name}.#{longest_name}<name>s %<status>s " \
         "%-#{longest_user}.#{longest_user}<user>s %<file>s", 
-        info
+        service_hash
       ))
     end
     return lines.join("\n")
@@ -149,24 +149,24 @@ class RunInfoListOutput
 end
 
 module OutputMessages
-  def self.already_running(info)
-    "Service '#{info.name}' is already running, use `#{bin} restart #{info.name}` to restart."
+  def self.already_running(service)
+    "Service '#{service.name}' is already running, use `#{bin} restart #{service.name}` to restart."
   end
   
-  def self.not_running(info)
-    "Service '#{info.name}' is not running."
+  def self.not_running(service)
+    "Service '#{service.name}' is not running."
   end
   
-  def self.begin_action(action, info)
-    "#{action} `#{info.name}`... (might take a while)".capitalize
+  def self.begin_action(action, service)
+    "#{action} `#{service.name}`... (might take a while)".capitalize
   end
   
-  def self.successful_action(action, info)
-    "Successfully #{action} `#{info.name}`."
+  def self.successful_action(action, service)
+    "Successfully #{action} `#{service.name}`."
   end
   
-  def self.cannot_manage(info)
-    "Cannot manage '#{info.name}', the service was started by '#{info.user}'."
+  def self.cannot_manage(service)
+    "Cannot manage '#{service.name}', the service was started by '#{service.user}'."
   end
 end
 
@@ -212,72 +212,72 @@ class Command
   
   private
   
-  def run(info)
-    return puts(OutputMessages.already_running(info)) if info.running?
-    puts(OutputMessages.begin_action('running', info))
-    @driver.run(info.definition)
-    ohai(OutputMessages.successful_action('started', info))
+  def run(service)
+    return puts(OutputMessages.already_running(service)) if service.running?
+    puts(OutputMessages.begin_action('running', service))
+    @driver.run(service.definition)
+    ohai(OutputMessages.successful_action('started', service))
   end
   
-  def start(info)
-    return puts(OutputMessages.already_running(info)) if info.running?
-    @driver.register(info.definition)
-    puts(OutputMessages.begin_action('starting', info))
-    @driver.start(info.definition)
-    ohai(OutputMessages.successful_action('started', info))
+  def start(service)
+    return puts(OutputMessages.already_running(service)) if service.running?
+    @driver.register(service.definition)
+    puts(OutputMessages.begin_action('starting', service))
+    @driver.start(service.definition)
+    ohai(OutputMessages.successful_action('started', service))
   end
   
-  def stop(info)
-    return puts(OutputMessages.not_running(info)) unless info.running?
-    return puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
-    @driver.unregister(info.definition)
-    puts(OutputMessages.begin_action('stopping', info))
-    @driver.stop(info.definition)
-    ohai(OutputMessages.successful_action('stopped', info))
+  def stop(service)
+    return puts(OutputMessages.not_running(service)) unless service.running?
+    return puts(OutputMessages.cannot_manage(service)) unless current_user_can_manage?(service)
+    @driver.unregister(service.definition)
+    puts(OutputMessages.begin_action('stopping', service))
+    @driver.stop(service.definition)
+    ohai(OutputMessages.successful_action('stopped', service))
   end
   
-  def restart(info)
-    return puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
-    @driver.register(info.definition)
-    puts(OutputMessages.begin_action('restarting', info))
-    @driver.restart(info.definition)
-    ohai(OutputMessages.successful_action('restarted', info))
+  def restart(service)
+    return puts(OutputMessages.cannot_manage(service)) unless current_user_can_manage?(service)
+    @driver.register(service.definition)
+    puts(OutputMessages.begin_action('restarting', service))
+    @driver.restart(service.definition)
+    ohai(OutputMessages.successful_action('restarted', service))
   end
   
-  def cleanup(info)
+  def cleanup(service)
     # Remove unused service files (for current user).
-    if @driver.installed?(info.definition) && (!info.running? || !current_user_owns?(info))
-      @driver.unregister(info.definition)
-      @driver.uninstall(info.definition)
-      ohai("Successfully removed service file for '#{info.name}' for user '#{current_user}'.")
+    if @driver.installed?(service.definition) && (!service.running? || !current_user_owns?(service))
+      @driver.unregister(service.definition)
+      @driver.uninstall(service.definition)
+      ohai("Successfully removed service file for '#{service.name}' for user '#{current_user}'.")
     end
     
     # Stop running services not having service files (for current user).
-    if info.running? && info.file.nil?
-      return puts(OutputMessages.cannot_manage(info)) unless current_user_can_manage?(info)
-      puts(OutputMessages.begin_action('stopping', info))
-      @driver.stop(info.definition)
-      ohai(OutputMessages.successful_action('stopped', info))
+    if service.running? && service.file.nil?
+      return puts(OutputMessages.cannot_manage(service)) unless current_user_can_manage?(service)
+      puts(OutputMessages.begin_action('stopping', service))
+      @driver.stop(service.definition)
+      ohai(OutputMessages.successful_action('stopped', service))
     end
   end
   
   def list(names)
-    run_info = run_info_by_name(names)
-    puts(RunInfoListOutput.create(run_info))
+    service_list = service_list_by_name(names)
+    puts(ServiceListOutput.create(service_list))
   end
   
-  def purge(info)
-    stop(info)
-    info = @driver.run_info(info.definition)
-    cleanup(info)
+  def purge(service)
+    stop(service)
+    service = @driver.status(service.definition)
+    cleanup(service)
   end
   
   def foreach(names, method, is_input = false)
     raise("Please provide formula(e) name(s) or use --all.") if (names.empty? && is_input)
-    run_info_by_name(names).each { |info| send(method, info) }
+    service_list_by_name(names).each { |service| send(method, service) }
   end
   
-  def run_info_by_name(names)
+  def service_list_by_name(names)
     non_service_formulae = []
     missing_formulae = []
 
@@ -296,16 +296,16 @@ class Command
     end
 
     service_names.map do |name|
-      @driver.run_info(@service_definitions[name])
+      @driver.status(@service_definitions[name])
     end
   end
 
-  def current_user_can_manage?(info)
-    !info.running? || current_user_owns?(info)
+  def current_user_can_manage?(service)
+    !service.running? || current_user_owns?(service)
   end
   
-  def current_user_owns?(info)
-    current_user == info.user
+  def current_user_owns?(service)
+    current_user == service.user
   end
   
   def current_user
