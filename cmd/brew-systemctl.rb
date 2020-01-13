@@ -48,6 +48,12 @@ module Kernel
   end
 end
 
+module Homebrew
+  def self.user
+    @user ||= Etc.getpwuid(HOMEBREW_PREFIX.stat.uid)
+  end
+end
+
 class DriverFactory
   def self.create
     if OS.linux? && which('systemctl')
@@ -334,6 +340,10 @@ end
 # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
 if ENV['TMUX'] && !quiet_system('/usr/bin/pbpaste')
   abort("#{bin} cannot run under tmux!")
+end
+
+unless [Homebrew.user.uid].include?(Process.uid)
+  abort("The `#{bin}` command can only be run with `#{Homebrew.user.name}` user - as `#{Homebrew.user.name}` is the owner of the Homebrew installation.")
 end
 
 begin
