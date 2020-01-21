@@ -82,9 +82,8 @@ module SystemCtl
 
     private
 
-    def invoke(*args)
-      args.unshift('--user') unless Process.uid.zero?
-      @commandline.invoke(args)
+    def invoke(*args, **opts)
+      @commandline.invoke(args, opts)
     end
 
     def get_service_file_path(definition, user = nil)
