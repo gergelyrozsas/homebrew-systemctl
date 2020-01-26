@@ -54,6 +54,13 @@ module Homebrew
   end
 end
 
+class Array
+  def resize(length, fill = '')
+    return fill(fill, size, length - size) if (size < length)
+    slice(0, length)
+  end
+end
+
 class DriverFactory
   def self.create
     if OS.linux? && which('systemctl')
@@ -86,10 +93,6 @@ class Service
   def running?
     :started == @status
   end
-  
-  def to_h
-    { name: name, user: user, file: file, status: status }
-  end
 end
 
 class ServiceDefinition
@@ -116,41 +119,59 @@ class ServiceDefinition
   end
 end
 
-class ServiceListOutput
-  def self.create(service_list)
-    service_hashes = service_list.map do |service|
-      service.to_h
-    end
-
-    longest_name = [service_hashes.max_by { |service_hash| service_hash[:name].length }[:name].length, 4].max
-    longest_user = [service_hashes.map { |service_hash| service_hash[:user].nil? ? 4 : service_hash[:user].length }.max, 4].max
+class Table
+  def initialize
+    @header = []
+    @rows = []
+    yield self if block_given?
+  end
   
-    lines = []
-    lines.push(format(
-      "#{Tty.bold}%-#{longest_name}.#{longest_name}<name>s %-7.7<status>s " \
-      "%-#{longest_user}.#{longest_user}<user>s %<file>s#{Tty.reset}",
-      {
-        name: 'Name',
-        status: 'Status',
-        user: 'User',
-        file: 'File'
-      }
-    ))
-    service_hashes.each do |service_hash|
-      service_hash[:status] = case service_hash[:status]
-        when :started then "#{Tty.green}started#{Tty.reset}"
-        when :stopped then "stopped"
-        when :error   then "#{Tty.red}error  #{Tty.reset}"
-        when :unknown then "#{Tty.yellow}unknown#{Tty.reset}"
-      end
+  def header=(array)
+    @header = [array]
+  end
 
-      lines.push(format(
-        "%-#{longest_name}.#{longest_name}<name>s %<status>s " \
-        "%-#{longest_user}.#{longest_user}<user>s %<file>s", 
-        service_hash
-      ))
+  def rows=(array_of_rows)
+    @rows = []
+    add_rows(array_of_rows)
+  end
+
+  def add_rows(array_of_rows)
+    array_of_rows.each { |row| add_row(row) }
+  end
+
+  def add_row(array)
+    array = array.map { |item| item.is_a?(Array) ? item : [item] }
+    actual_row_count = array.max_by { |item| item.size }.size
+    (0 .. (actual_row_count - 1)).each do |index|
+      @rows.push(array.map { |item| item[index] || '' })
     end
-    return lines.join("\n")
+  end
+  
+  def to_s
+    column_lengths = get_column_lengths
+    format_string = column_lengths.map { |length| "%-#{length}.#{length}s" }.join(' ')
+    lines = @header.map do |header|
+      format("#{Tty.bold}#{format_string}#{Tty.reset}", *header.resize(column_lengths.size))
+    end + @rows.map do |row|
+      format(format_string, *row.resize(column_lengths.size))
+    end
+    lines.join("\n")
+  end
+  
+  private
+
+  def get_column_lengths
+    max_item_count = (header_and_rows.max_by { |array| array.size } || []).size
+    (0 .. (max_item_count - 1)).map do |index|
+      header_and_rows
+        .map { |row| (row[index] || '').to_s }
+        .max_by { |item| item.length }
+        .length
+    end
+  end
+
+  def header_and_rows
+    @header + @rows
   end
 end
 
@@ -268,8 +289,11 @@ class Command
   end
   
   def list(names)
-    service_list = service_list_by_name(names)
-    puts(ServiceListOutput.create(service_list))
+    table = Table.new do |t|
+      t.header = %w(Name Status User File)
+      t.rows = service_list_by_name(names).map { |service| [service.name, service.status, service.user, service.file] }
+    end
+    puts(table)
   end
   
   def purge(service)
