@@ -1,36 +1,10 @@
 # frozen_string_literal: true
 
-#:  * `systemctl` <subcommand>:
-#:
-#:  Manage background services with Linux' `systemctl`(1) daemon manager
-#:      --all                           run <subcommand> on all services.
-#:
-#:  `brew systemctl list`
-#:      List all running services (from all users).
-#:
-#:  `brew systemctl run` (<formulae>|`--all`)
-#:      Run the services of <formulae> without registering them to launch at login.
-#:
-#:  `brew systemctl start` (<formulae>|`--all`)
-#:      Start the services of <formulae> immediately and register them to launch at login.
-#:
-#:  `brew systemctl stop` (<formulae>|`--all`)
-#:      Stop the services of <formulae> immediately and unregister them from launching at login.
-#:
-#:  `brew systemctl restart` (<formulae>|`--all`)
-#:      Stop (if necessary) and start the services of <formulae> immediately and register them to launch at login.
-#:
-#:  `brew systemctl cleanup`
-#:      Remove all unused services.
-#:
-#:  `brew systemctl purge`
-#:      Remove all services.
-#:
-#:  Operate on `~/.config/systemd/user` (started at login).
+require "cli/parser"
 
 module Kernel
   def passthru(cmd, env = {})
-    if ARGV.verbose?
+    if Homebrew.args.verbose?
       puts "Executing `#{cmd}`"
     end
 
@@ -357,23 +331,59 @@ class ArgvInput
   end
 end
 
-unless defined?(HOMEBREW_LIBRARY_PATH)
-  abort("Runtime error: Homebrew is required. Please start via `#{bin}`.")
-end
+module Homebrew
+  module_function
 
-# pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
-if ENV['TMUX'] && !quiet_system('/usr/bin/pbpaste')
-  abort("#{bin} cannot run under tmux!")
-end
+  def systemctl_args
+    Homebrew::CLI::Parser.new do
+      usage_banner <<~EOS
+        `systemctl` <subcommand>
 
-unless [Homebrew.user.uid].include?(Process.uid)
-  abort("The `#{bin}` command can only be run with `#{Homebrew.user.name}` user - as `#{Homebrew.user.name}` is the owner of the Homebrew installation.")
-end
+        Manage background services with Linux' `systemctl`(1) daemon manager.
 
-begin
-  command = Command.new(DriverFactory.create, Formula.installed)
-  command.execute(ArgvInput.new(ARGV))
-rescue RuntimeError => e
-  odebug(e.backtrace)
-  onoe(e.message)
+        `brew systemctl list`
+          List all running services (from all users).
+
+        `brew systemctl run` (<formulae>|`--all`)
+          Run the services of <formulae> without registering them to launch at login.
+
+        `brew systemctl start` (<formulae>|`--all`)
+          Start the services of <formulae> immediately and register them to launch at login.
+
+        `brew systemctl stop` (<formulae>|`--all`)
+          Stop the services of <formulae> immediately and unregister them from launching at login.
+
+        `brew systemctl restart` (<formulae>|`--all`)
+          Stop (if necessary) and start the services of <formulae> immediately and register them to launch at login.
+
+        `brew systemctl cleanup`
+          Remove all unused services.
+
+        `brew systemctl purge`
+          Remove all services.
+
+        Operate on `~/.config/systemd/user` (started at login).
+      EOS
+      switch_option("-a", "--all", description: "Run <subcommand> on all services.")
+      switch_option(:verbose)
+      switch_option(:debug)
+    end
+  end
+
+  def systemctl
+    systemctl_args.parse
+
+    # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
+    raise UsageError.new("#{bin} cannot run under tmux!") if ENV['TMUX'] && !quiet_system('/usr/bin/pbpaste')
+    # The command can only be run with the user owning the Homebrew installation directory
+    raise UsageError.new("The `#{bin}` command can only be run with `#{Homebrew.user.name}` user - as `#{Homebrew.user.name}` is the owner of the Homebrew installation.") unless [Homebrew.user.uid].include?(Process.uid)
+
+    begin
+      command = Command.new(DriverFactory.create, Formula.installed)
+      command.execute(ArgvInput.new(Homebrew.args))
+    rescue RuntimeError => e
+      odebug(e.backtrace)
+      onoe(e.message)
+    end
+  end
 end
