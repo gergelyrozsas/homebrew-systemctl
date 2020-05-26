@@ -323,7 +323,7 @@ class ArgvInput
   end
   
   def arguments
-    @argv.named.dclone
+    @argv.named.dup
   end
   
   def flag?(name)
